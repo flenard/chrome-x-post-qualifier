@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Post Qualifier - TypeSafe AI</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <div class="logo-icon">⚡</div>
+        <div>
+          <div class="title-row">
+            <h1 class="title">X-Ray Qualifier</h1>
+            <span class="version-badge" id="versionTag">v1.0.1</span>
+          </div>
+          <p class="subtitle">Powered by TypeSafe AI (Jev)</p>
+        </div>
+      </div>
+      <span class="status-badge" id="apiStatus">Active</span>
+    </div>
+
+    <!-- Live Cost & Value Card -->
+    <div class="metrics-grid">
+      <div class="metric-card highlight">
+        <div class="metric-label">Estimated Cost</div>
+        <div class="metric-value" id="costVal">$0.0000</div>
+        <div class="metric-sub">$0.042 / 1M tokens</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Posts Qualified</div>
+        <div class="metric-value" id="postsVal">0</div>
+        <div class="metric-sub" id="tokensVal">0 tokens</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Bait Filtered</div>
+        <div class="metric-value" id="baitVal">0</div>
+        <div class="metric-sub">Auto-collapsed</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Ads Removed</div>
+        <div class="metric-value" id="adsVal">0</div>
+        <div class="metric-sub">Promoted posts</div>
+      </div>
+    </div>
+
+    <!-- Toggles Section -->
+    <div class="section-title">Automation & Filtering</div>
+    <div class="toggles-card">
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">⚡ Auto-Qualify on Scroll</span>
+          <span class="toggle-desc">Evaluates posts as they dwell in your feed</span>
+        </div>
+        <input type="checkbox" id="toggleAuto" class="switch">
+      </label>
+
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">🪤 Collapse Engagement Bait</span>
+          <span class="toggle-desc">Replaces shallow bait with click-to-reveal banner</span>
+        </div>
+        <input type="checkbox" id="toggleBait" class="switch">
+      </label>
+
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">🚫 Collapse Spam / Scams</span>
+          <span class="toggle-desc">Automatically collapses spam & crypto shilling</span>
+        </div>
+        <input type="checkbox" id="toggleSpam" class="switch">
+      </label>
+
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">📢 Hide Promoted Ads</span>
+          <span class="toggle-desc">Removes sponsored ads from your timeline</span>
+        </div>
+        <input type="checkbox" id="toggleAds" class="switch">
+      </label>
+    </div>
+
+    <!-- API Key Section (Clean Status + Expandable Edit) -->
+    <div class="key-card">
+      <div class="key-status-row">
+        <div class="key-info">
+          <span class="key-icon">🔐</span>
+          <div>
+            <div class="key-title" id="keyTitle">API Key</div>
+            <div class="key-hint" id="keyHint">No key set</div>
+          </div>
+        </div>
+        <button id="toggleEditKeyBtn" class="btn-subtle">Change</button>
+      </div>
+
+      <div class="input-group hidden" id="keyInputGroup" style="margin-top: 8px;">
+        <input type="password" id="apiKeyInput" placeholder="Paste new key here..." autocomplete="off">
+        <button id="saveKeyBtn" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+
+    <!-- Footer Actions -->
+    <div class="footer-actions">
+      <button id="resetStatsBtn" class="btn-text">Reset Stats</button>
+      <button id="clearCacheBtn" class="btn-text">Clear Cache</button>
+    </div>
+  </div>
+
+  <script type="module" src="popup.ts"></script>
+</body>
+</html>
