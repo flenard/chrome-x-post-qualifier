@@ -6,9 +6,14 @@ import {
 import { injectPillBadge, setupTweetCollapse } from './badge';
 import type { ExtensionSettings, QualificationResult } from '../types';
 
+const DWELL_MS = 450;        // how long a tweet must stay in view before we pay to score it
+const SCAN_DEBOUNCE_MS = 100; // coalesce DOM mutation bursts into one scan
+
 let currentSettings: ExtensionSettings | null = null;
 const processingTweets = new Set<string>();
-const dwellTimers = new Map<HTMLElement, NodeJS.Timeout>();
+type TimerId = ReturnType<typeof setTimeout>;
+
+const dwellTimers = new Map<HTMLElement, TimerId>();
 
 // IntersectionObserver to analyze tweets when they appear in viewport
 const intersectionObserver = new IntersectionObserver(
@@ -22,7 +27,7 @@ const intersectionObserver = new IntersectionObserver(
           const timer = setTimeout(() => {
             dwellTimers.delete(el);
             handleQualifyTweet(el, false);
-          }, 450);
+          }, DWELL_MS);
           dwellTimers.set(el, timer);
         }
       } else {
@@ -53,9 +58,15 @@ async function init() {
   // Initial scan
   scanTweets();
 
-  // MutationObserver to detect newly loaded tweets dynamically
+  // X mutates the DOM constantly. Without a debounce, every mutation triggers a
+  // full-document querySelectorAll, hundreds of times a second.
+  let scanTimer: TimerId | null = null;
   const observer = new MutationObserver(() => {
-    scanTweets();
+    if (scanTimer !== null) return;
+    scanTimer = setTimeout(() => {
+      scanTimer = null;
+      scanTweets();
+    }, SCAN_DEBOUNCE_MS);
   });
 
   observer.observe(document.body, {
@@ -137,29 +148,35 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
   const metadata = parseTweetElement(article);
   if (!metadata || !metadata.text) return;
 
+  // Held until the reply arrives. sendMessage returns immediately, so releasing
+  // this in a finally block would free the lock before the API has answered and
+  // let the same tweet be sent — and billed — more than once.
   processingTweets.add(tweetId);
+
+  const failed = (reason: string) => {
+    console.warn(`[X-Ray] Qualification failed for ${tweetId}:`, reason);
+    processingTweets.delete(tweetId);
+    injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
+  };
 
   try {
     // Send to background service worker (avoids page CSP restrictions)
     chrome.runtime.sendMessage({ type: 'QUALIFY_POST', metadata }, (response) => {
       if (chrome.runtime.lastError) {
-        console.warn('[X-Ray] Runtime message error:', chrome.runtime.lastError.message);
-        injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
+        failed(chrome.runtime.lastError.message ?? 'runtime message error');
         return;
       }
 
       if (response && response.success && response.result) {
+        processingTweets.delete(tweetId);
         applyQualification(article, userNameContainer, response.result);
-      } else {
-        console.error('[X-Ray] Qualification failed:', response?.error);
-        injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
+        return;
       }
+
+      failed(response?.error ?? 'no result returned');
     });
   } catch (err) {
-    console.error(`[X-Ray] Error dispatching tweet ${tweetId}:`, err);
-    injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
-  } finally {
-    processingTweets.delete(tweetId);
+    failed(err instanceof Error ? err.message : String(err));
   }
 }
 

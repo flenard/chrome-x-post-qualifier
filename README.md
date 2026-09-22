@@ -23,7 +23,7 @@ blocks promoted ads, and tracks your API spend down to fractions of a cent.
 - 💰 **Live cost tracker** — posts analyzed, input tokens used, and exact USD cost
   ($0.042 per 1M input tokens, outputs free). About **$0.00003 per post**.
 - ⚡ **Auto-dwell + caching** — a tweet is only scored after it stays in your viewport
-  for 750 ms, so fast scrolling costs nothing. Results are cached in `chrome.storage.local`.
+  for 450 ms, so fast scrolling costs nothing. Results are cached in `chrome.storage.local`.
 
 ---
 
@@ -104,8 +104,9 @@ variable.
 ## 🛠 Development
 
 ```bash
-npm run dev    # rebuild on change
-npm run build  # one-off production build
+npm run dev        # rebuild on change
+npm run build      # typecheck, then production build
+npm run typecheck  # tsc --noEmit
 ```
 
 After a rebuild, click the reload icon on the extension card in `chrome://extensions/`.

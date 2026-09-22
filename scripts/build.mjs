@@ -1,25 +1,13 @@
 import { build } from 'vite';
+import { ensureLocalSecret } from './ensure-secret.mjs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, mkdirSync, existsSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
 
 
-// The API key lives in src/config/local-secret.json, which is gitignored.
-// A fresh clone has no such file, so create an empty one to keep the build working.
-// Users then paste their key into the extension popup, or run `npm run sync-key`.
-function ensureLocalSecret() {
-  const secretFile = resolve(rootDir, 'src/config/local-secret.json');
-  if (existsSync(secretFile)) return;
-  const exampleFile = resolve(rootDir, 'src/config/local-secret.example.json');
-  const contents = existsSync(exampleFile)
-    ? readFileSync(exampleFile, 'utf8')
-    : JSON.stringify({ apiKey: '' }, null, 2);
-  writeFileSync(secretFile, contents, 'utf8');
-  console.log('No local-secret.json found — created an empty one. Add your API key in the extension popup.');
-}
 
 async function run() {
   console.log('Building Chrome Extension...');

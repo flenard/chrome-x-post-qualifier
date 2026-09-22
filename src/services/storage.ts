@@ -4,46 +4,71 @@ import { DEFAULT_SETTINGS, DEFAULT_STATS, calculateCostUsd } from '../config/def
 const SETTINGS_KEY = 'typesafe_settings';
 const STATS_KEY = 'typesafe_stats';
 const CACHE_PREFIX = 'ts_cache_';
+const CACHE_INDEX_KEY = 'ts_qualification_index';
 const MAX_CACHE_ITEMS = 1000;
 
-export async function getSettings(): Promise<ExtensionSettings> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve(DEFAULT_SETTINGS);
-      return;
-    }
-    chrome.storage.local.get([SETTINGS_KEY], (res) => {
-      const saved = res[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined;
-      resolve({ ...DEFAULT_SETTINGS, ...(saved || {}) });
+const hasStorage = () => typeof chrome !== 'undefined' && !!chrome.storage;
+
+/**
+ * chrome.storage callbacks never reject. A failed write reports through
+ * chrome.runtime.lastError, which is trivial to miss, so every read and write
+ * goes through these two helpers and surfaces the error instead of swallowing it.
+ */
+function storageGet<T = Record<string, unknown>>(keys: string[] | null): Promise<T> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(`storage.get failed: ${err.message}`));
+        return;
+      }
+      resolve(res as T);
     });
   });
+}
+
+function storageSet(items: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(items, () => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(`storage.set failed: ${err.message}`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function storageRemove(keys: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(keys, () => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(`storage.remove failed: ${err.message}`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function getSettings(): Promise<ExtensionSettings> {
+  if (!hasStorage()) return DEFAULT_SETTINGS;
+  const res = await storageGet<Record<string, Partial<ExtensionSettings>>>([SETTINGS_KEY]);
+  return { ...DEFAULT_SETTINGS, ...(res[SETTINGS_KEY] || {}) };
 }
 
 export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
+  if (!hasStorage()) return;
   const current = await getSettings();
-  const updated = { ...current, ...settings };
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve();
-      return;
-    }
-    chrome.storage.local.set({ [SETTINGS_KEY]: updated }, () => {
-      resolve();
-    });
-  });
+  await storageSet({ [SETTINGS_KEY]: { ...current, ...settings } });
 }
 
 export async function getStats(): Promise<ExtensionStats> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve(DEFAULT_STATS);
-      return;
-    }
-    chrome.storage.local.get([STATS_KEY], (res) => {
-      const saved = res[STATS_KEY] as Partial<ExtensionStats> | undefined;
-      resolve({ ...DEFAULT_STATS, ...(saved || {}) });
-    });
-  });
+  if (!hasStorage()) return DEFAULT_STATS;
+  const res = await storageGet<Record<string, Partial<ExtensionStats>>>([STATS_KEY]);
+  return { ...DEFAULT_STATS, ...(res[STATS_KEY] || {}) };
 }
 
 export async function recordAnalysis(result: QualificationResult): Promise<ExtensionStats> {
@@ -60,85 +85,60 @@ export async function recordAnalysis(result: QualificationResult): Promise<Exten
     totalAdsBlocked: current.totalAdsBlocked
   };
 
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve(updated);
-      return;
-    }
-    chrome.storage.local.set({ [STATS_KEY]: updated }, () => {
-      resolve(updated);
-    });
-  });
+  if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
+  return updated;
 }
 
 export async function recordAdBlocked(): Promise<ExtensionStats> {
   const current = await getStats();
-  const updated: ExtensionStats = {
-    ...current,
-    totalAdsBlocked: current.totalAdsBlocked + 1
-  };
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve(updated);
-      return;
-    }
-    chrome.storage.local.set({ [STATS_KEY]: updated }, () => {
-      resolve(updated);
-    });
-  });
+  const updated: ExtensionStats = { ...current, totalAdsBlocked: current.totalAdsBlocked + 1 };
+  if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
+  return updated;
 }
 
 export async function resetStats(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve();
-      return;
-    }
-    chrome.storage.local.set({ [STATS_KEY]: DEFAULT_STATS }, () => {
-      resolve();
-    });
-  });
+  if (!hasStorage()) return;
+  await storageSet({ [STATS_KEY]: DEFAULT_STATS });
 }
 
 export async function getCachedQualification(tweetId: string): Promise<QualificationResult | null> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve(null);
-      return;
-    }
-    const key = `${CACHE_PREFIX}${tweetId}`;
-    chrome.storage.local.get([key], (res) => {
-      resolve((res[key] as QualificationResult) || null);
-    });
-  });
+  if (!hasStorage()) return null;
+  const key = `${CACHE_PREFIX}${tweetId}`;
+  const res = await storageGet<Record<string, QualificationResult>>([key]);
+  return res[key] || null;
 }
 
+/**
+ * Stores a result and keeps the cache bounded at MAX_CACHE_ITEMS.
+ *
+ * CACHE_INDEX_KEY holds the tweet ids in insertion order. Trimming reads and
+ * writes only that small array, so a write never has to enumerate the whole
+ * storage area. Without this the cache grows until it hits the 10MB quota and
+ * every later write fails.
+ */
 export async function setCachedQualification(tweetId: string, result: QualificationResult): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve();
-      return;
-    }
-    const key = `${CACHE_PREFIX}${tweetId}`;
-    chrome.storage.local.set({ [key]: result }, () => {
-      resolve();
-    });
-  });
+  if (!hasStorage()) return;
+
+  const key = `${CACHE_PREFIX}${tweetId}`;
+  await storageSet({ [key]: result });
+
+  const res = await storageGet<Record<string, string[]>>([CACHE_INDEX_KEY]);
+  const index = (res[CACHE_INDEX_KEY] || []).filter((id) => id !== tweetId);
+  index.push(tweetId);
+
+  if (index.length > MAX_CACHE_ITEMS) {
+    const evicted = index.splice(0, index.length - MAX_CACHE_ITEMS);
+    await storageRemove(evicted.map((id) => `${CACHE_PREFIX}${id}`));
+  }
+
+  await storageSet({ [CACHE_INDEX_KEY]: index });
 }
 
 export async function clearCache(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage) {
-      resolve();
-      return;
-    }
-    chrome.storage.local.get(null, (items) => {
-      const keysToRemove = Object.keys(items).filter((k) => k.startsWith(CACHE_PREFIX));
-      if (keysToRemove.length > 0) {
-        chrome.storage.local.remove(keysToRemove, () => resolve());
-      } else {
-        resolve();
-      }
-    });
-  });
+  if (!hasStorage()) return;
+  const items = await storageGet<Record<string, unknown>>(null);
+  const keysToRemove = Object.keys(items).filter(
+    (k) => k.startsWith(CACHE_PREFIX) || k === CACHE_INDEX_KEY
+  );
+  if (keysToRemove.length > 0) await storageRemove(keysToRemove);
 }

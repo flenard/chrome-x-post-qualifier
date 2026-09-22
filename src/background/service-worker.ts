@@ -1,4 +1,4 @@
-import { getStats, getSettings, saveSettings, setCachedQualification, getCachedQualification, recordAnalysis, recordAdBlocked } from '../services/storage';
+import { getSettings, saveSettings, setCachedQualification, getCachedQualification, recordAnalysis, recordAdBlocked } from '../services/storage';
 import { qualifyTweet } from '../api/typesafe';
 
 // Initialize default storage on install
