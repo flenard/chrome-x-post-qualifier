@@ -47,6 +47,27 @@
       </div>
     </div>
 
+    <!-- Focus Mode -->
+    <div class="section-title">Focus</div>
+    <div class="toggles-card">
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">🎯 Focus Mode</span>
+          <span class="toggle-desc">Hide every scored post below your depth bar</span>
+        </div>
+        <input type="checkbox" id="toggleFocus" class="switch">
+      </label>
+
+      <div class="slider-item" id="focusDepthRow">
+        <div class="slider-head">
+          <span class="toggle-name">Minimum depth</span>
+          <span class="slider-value" id="focusDepthVal">3.0 / 5</span>
+        </div>
+        <input type="range" id="focusDepthRange" class="range" min="2" max="4.5" step="0.5">
+        <div class="slider-scale"><span>More posts</span><span>Only the best</span></div>
+      </div>
+    </div>
+
     <!-- Toggles Section -->
     <div class="section-title">Automation & Filtering</div>
     <div class="toggles-card">
@@ -73,6 +94,23 @@
         </div>
         <input type="checkbox" id="toggleSpam" class="switch">
       </label>
+
+      <label class="toggle-item">
+        <div class="toggle-text">
+          <span class="toggle-name">🤖 Collapse AI Slop</span>
+          <span class="toggle-desc">Hides generic, template-style AI posts</span>
+        </div>
+        <input type="checkbox" id="toggleSlop" class="switch">
+      </label>
+
+      <div class="slider-item">
+        <div class="slider-head">
+          <span class="toggle-name">Filter strictness</span>
+          <span class="slider-value" id="thresholdVal">70% sure</span>
+        </div>
+        <input type="range" id="thresholdRange" class="range" min="0.5" max="0.95" step="0.05">
+        <div class="slider-scale"><span>Hide more</span><span>Hide only when sure</span></div>
+      </div>
 
       <label class="toggle-item">
         <div class="toggle-text">

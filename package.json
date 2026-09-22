@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/build.mjs --watch",
-    "prebuild": "node scripts/ensure-secret.mjs",
     "build": "npm run typecheck && node scripts/build.mjs",
-    "pretypecheck": "node scripts/ensure-secret.mjs",
     "typecheck": "tsc --noEmit",
     "sync-key": "node scripts/sync-key.mjs"
   },

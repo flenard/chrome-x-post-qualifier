@@ -18,18 +18,20 @@ export function parseTweetElement(article: HTMLElement): PostMetadata | null {
       }
     }
 
-    // 3. Extract Tweet Text
-    const textEl = article.querySelector<HTMLElement>('[data-testid="tweetText"]');
-    const text = textEl ? textEl.innerText.trim() : '';
+    // 3. Extract Tweet Text, and the quoted post's text separately.
+    // A quoted post renders inside a [role="link"] box in the same article, with
+    // its own tweetText. Without it, "42% cheaper, give it a spin 👇" quoting an
+    // official launch reads like an ad and gets scored as spam.
+    const { text, quotedText, quotedHandle } = extractTexts(article);
 
-    // If there's neither text nor an ID, and it's not an ad, we cannot qualify it
-    if (!text && !isAd) {
+    // If there's no text at all, and it's not an ad, we cannot qualify it
+    if (!text && !quotedText && !isAd) {
       return null;
     }
 
     // Generate fallback pseudo-ID if tweetId is missing (e.g. some ads don't have public status links)
     if (!tweetId) {
-      tweetId = `pseudo_${hashString(text || article.innerText.slice(0, 100))}`;
+      tweetId = `pseudo_${hashString(text || quotedText || article.innerText.slice(0, 100))}`;
     }
 
     // 4. Extract Author and Handle
@@ -71,6 +73,8 @@ export function parseTweetElement(article: HTMLElement): PostMetadata | null {
       authorName,
       authorHandle,
       permalink,
+      quotedText: quotedText || undefined,
+      quotedHandle: quotedHandle || undefined,
       hasLinks,
       hasMedia,
       isThread,
@@ -80,6 +84,27 @@ export function parseTweetElement(article: HTMLElement): PostMetadata | null {
     console.warn('[X-Post-Qualifier] Failed to parse tweet:', err);
     return null;
   }
+}
+
+function extractTexts(article: HTMLElement): { text: string; quotedText: string; quotedHandle: string } {
+  let text = '';
+  let quotedText = '';
+  let quotedHandle = '';
+
+  for (const el of Array.from(article.querySelectorAll<HTMLElement>('[data-testid="tweetText"]'))) {
+    const quoteBox = el.closest<HTMLElement>('[role="link"]');
+    const isQuote = quoteBox !== null && article.contains(quoteBox);
+
+    if (!isQuote && !text) {
+      text = el.innerText.trim();
+    } else if (isQuote && !quotedText) {
+      quotedText = el.innerText.trim();
+      const handle = quoteBox.querySelector<HTMLElement>('[data-testid="User-Name"]')?.innerText.match(/@\w+/);
+      quotedHandle = handle ? handle[0] : '';
+    }
+  }
+
+  return { text, quotedText, quotedHandle };
 }
 
 export function detectIsAd(article: HTMLElement): boolean {

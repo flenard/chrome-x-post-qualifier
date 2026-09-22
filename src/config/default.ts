@@ -1,13 +1,15 @@
 import type { ExtensionSettings, ExtensionStats } from '../types';
-import { INITIAL_API_KEY } from './secret';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
-  apiKey: INITIAL_API_KEY,
+  apiKey: '',                 // set in the popup; never bundled into the build
   autoQualify: true,           // Auto mode as requested by user
   autoCollapseBait: true,      // Auto collapse engagement bait with click to reveal
   autoCollapseSpam: true,      // Auto collapse spam
   autoCollapseAds: true,       // Auto hide/collapse sponsored ads
-  minBaitThreshold: 0.70,      // Minimum confidence to auto-collapse
+  autoCollapseSlop: true,      // Auto collapse generic AI-generated posts
+  minBaitThreshold: 0.70,      // Minimum confidence to auto-collapse bait, slop or spam
+  focusMode: false,            // Show only posts at or above focusMinDepth
+  focusMinDepth: 3.0,
   showInFeedBadge: true
 };
 

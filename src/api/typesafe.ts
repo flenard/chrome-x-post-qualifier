@@ -13,6 +13,9 @@ export async function qualifyTweet(
     model: TYPESAFE_MODEL,
     state: {
       post_text: metadata.text,
+      quoted_post: metadata.quotedText
+        ? { author_handle: metadata.quotedHandle ?? '@unknown', text: metadata.quotedText }
+        : null,
       author: metadata.authorName,
       handle: metadata.authorHandle,
       has_links: metadata.hasLinks,

@@ -52,6 +52,42 @@ export const CATEGORY_THEMES: Record<PostCategory, CategoryTheme> = {
   }
 };
 
+const UNSURE_THEME: CategoryTheme = {
+  label: 'Unsure',
+  emoji: '❔',
+  bg: 'rgba(148, 163, 184, 0.12)',
+  border: 'rgba(148, 163, 184, 0.35)',
+  text: '#94a3b8',
+  bannerBg: 'rgba(51, 65, 85, 0.3)'
+};
+
+/** Below this, no label won a majority and the badge says "Unsure", not the label. */
+export const UNSURE_BELOW = 0.5;
+
+/** Probability of the winning label (falls back to confidence if absent). */
+export function topProbability(result: QualificationResult): number {
+  const p = Number(result.categoryProbabilities?.[result.category]);
+  return Number.isFinite(p) ? p : result.categoryConfidence;
+}
+
+/**
+ * True when the winning label is a coin flip, e.g. spam 44% vs good 31%.
+ * Showing a red "Spam / Scam" for that reads as a verdict the model never made.
+ */
+export function isUnsure(result: QualificationResult): boolean {
+  return topProbability(result) < UNSURE_BELOW;
+}
+
+function themeFor(result: QualificationResult): CategoryTheme {
+  if (isUnsure(result)) return UNSURE_THEME;
+  return CATEGORY_THEMES[result.category] || CATEGORY_THEMES.good;
+}
+
+function leaningText(result: QualificationResult): string {
+  const label = (CATEGORY_THEMES[result.category] || CATEGORY_THEMES.good).label;
+  return `Leans ${label} (${Math.round(topProbability(result) * 100)}%)`;
+}
+
 /**
  * Creates or updates the Shadow DOM badge inside a tweet
  */
@@ -98,13 +134,14 @@ export function injectPillBadge(
     return badgeHost;
   }
 
-  const theme = CATEGORY_THEMES[result.category] || CATEGORY_THEMES.good;
+  const theme = themeFor(result);
   const depth = result.substanceDepthNormalized.toFixed(1);
+  const tooltip = isUnsure(result) ? leaningText(result) : '';
 
   shadow.innerHTML = `
     <style>${getBadgeStyles()}</style>
     <div class="ts-badge-container">
-      <button class="ts-badge" style="background:${theme.bg}; border-color:${theme.border}; color:${theme.text};">
+      <button class="ts-badge" title="${tooltip}" style="background:${theme.bg}; border-color:${theme.border}; color:${theme.text};">
         <span class="ts-emoji">${theme.emoji}</span>
         <span class="ts-title">${theme.label}</span>
         <span class="ts-sub">${depth}/5</span>
@@ -132,8 +169,11 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
     activePopoverCleanup = null;
   }
 
-  const theme = CATEGORY_THEMES[result.category] || CATEGORY_THEMES.good;
+  const theme = themeFor(result);
   const confidencePct = Math.round(result.categoryConfidence * 100);
+  const subtitle = isUnsure(result)
+    ? `${leaningText(result)} · no clear winner`
+    : `${confidencePct}% confidence by TypeSafe AI`;
   const depth = result.substanceDepthNormalized.toFixed(1);
 
   const portalHost = document.createElement('div');
@@ -249,7 +289,7 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
         <span style="font-size: 20px;">${theme.emoji}</span>
         <div style="flex:1;">
           <div class="ts-popover-title" style="color: ${theme.text};">${theme.label}</div>
-          <div class="ts-popover-subtitle">${confidencePct}% confidence by TypeSafe AI</div>
+          <div class="ts-popover-subtitle">${subtitle}</div>
         </div>
         <button class="ts-close-btn">&times;</button>
       </div>
@@ -276,7 +316,7 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
 
       <div class="ts-cost-info">
         <span>⚡ 1 pass evaluation</span>
-        <span>${(result.costUsd * 1000).toFixed(4)}¢ (${result.inputTokens} tok)</span>
+        <span>${(result.costUsd * 100).toFixed(4)}¢ (${result.inputTokens} tok)</span>
       </div>
     </div>
   `;
@@ -324,10 +364,13 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
 /**
  * Collapses a tweet element and injects a sleek, native-feeling reveal banner
  */
+export type CollapseReason = 'ad' | 'bait' | 'spam' | 'slop' | 'focus';
+
 export function setupTweetCollapse(
   article: HTMLElement,
-  type: 'ad' | 'bait' | 'spam',
-  result?: QualificationResult | null
+  type: CollapseReason,
+  result?: QualificationResult | null,
+  focusMinDepth?: number
 ): void {
   if (article.dataset.tsCollapsed === 'true') return;
   article.dataset.tsCollapsed = 'true';
@@ -354,6 +397,23 @@ export function setupTweetCollapse(
     accentColor = '#ef4444';
     bannerBg = 'rgba(239, 68, 68, 0.08)';
     borderColor = 'rgba(239, 68, 68, 0.25)';
+  } else if (type === 'slop') {
+    title = 'AI Slop hidden';
+    const conf = result ? Math.round(result.categoryConfidence * 100) : 90;
+    const depth = result ? result.substanceDepthNormalized.toFixed(1) : '1.0';
+    subtitle = `Generic AI-style text (${conf}% confidence) · ${depth}/5 substance depth`;
+    emoji = '🤖';
+    accentColor = '#a855f7';
+    bannerBg = 'rgba(168, 85, 247, 0.08)';
+    borderColor = 'rgba(168, 85, 247, 0.25)';
+  } else if (type === 'focus') {
+    title = 'Below your focus bar';
+    const depth = result ? result.substanceDepthNormalized.toFixed(1) : '?';
+    subtitle = `${depth}/5 substance depth · Focus mode shows ${(focusMinDepth ?? 3).toFixed(1)}+`;
+    emoji = '🎯';
+    accentColor = '#38bdf8';
+    bannerBg = 'rgba(56, 189, 248, 0.08)';
+    borderColor = 'rgba(56, 189, 248, 0.25)';
   } else {
     const conf = result ? Math.round(result.categoryConfidence * 100) : 90;
     const depth = result ? result.substanceDepthNormalized.toFixed(1) : '1.0';
@@ -544,6 +604,19 @@ export function setupTweetCollapse(
     revealBtn?.addEventListener('click', showTweet);
     hideBtn?.addEventListener('click', hideTweet);
   }
+}
+
+/**
+ * Undoes setupTweetCollapse, so a tweet can be re-judged when the settings
+ * change (focus bar moved, a filter switched off).
+ */
+export function clearTweetCollapse(article: HTMLElement): void {
+  if (article.dataset.tsCollapsed !== 'true') return;
+  const banner = article.querySelector(':scope > .ts-collapse-banner-host');
+  const mainContent = banner?.nextElementSibling as HTMLElement | null;
+  banner?.remove();
+  if (mainContent) mainContent.style.display = '';
+  delete article.dataset.tsCollapsed;
 }
 
 function getBadgeStyles(): string {

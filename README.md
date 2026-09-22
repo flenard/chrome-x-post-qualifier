@@ -19,6 +19,12 @@ blocks promoted ads, and tracks your API spend down to fractions of a cent.
 - 🪤 **Auto-collapse bait and spam** into a small pill banner:
   `[ 🪤 Engagement Bait (Confidence: 100% · Depth: 1.1/5) · Click to reveal ]`
   Click to reveal, click again to re-collapse.
+- 🤖 **Auto-collapse AI slop** — generic, template-style AI posts get the same banner.
+- 🎚 **Filter strictness** — one slider sets how sure the model must be (50–95%)
+  before bait, AI slop or spam is hidden.
+- 🎯 **Focus mode** — hides every scored post below a minimum depth (2.0–4.5 / 5), so
+  only the substantial posts stay. Changing it re-judges the tweets already on the
+  page from the cache, with no new API calls.
 - 📢 **Ad blocker** — removes sponsored "Ad" / "Promoted" tweets from the timeline.
 - 💰 **Live cost tracker** — posts analyzed, input tokens used, and exact USD cost
   ($0.042 per 1M input tokens, outputs free). About **$0.00003 per post**.
@@ -61,27 +67,20 @@ Now open [x.com](https://x.com) and scroll. Posts get scored as you go.
 
 ## 🔑 Supplying the API key
 
-The key is **never committed**. It lives in `src/config/local-secret.json`, which is
-gitignored. You have three ways to provide it:
+The key is **never committed and never bundled into the build**. The extension reads it
+from `chrome.storage`, and only the popup writes it there. `npm run build` fails if a key
+turns up anywhere in `dist/`, so a shared build cannot carry your key.
 
-**A. The popup (easiest)** — paste it into the extension UI. Nothing else needed.
+**A. The popup** — click **Change**, paste the key, **Save**. That is the only way the
+extension gets a key.
 
-**B. A local file**
-
-```bash
-cp src/config/local-secret.example.json src/config/local-secret.json
-# then edit the file and put your key in
-npm run build
-```
-
-**C. 1Password CLI**
-
-If you keep the key in 1Password, point the sync script at your own item:
+**B. 1Password CLI** — fetches the key and copies it to your clipboard, ready to paste
+into the popup. It also writes `src/config/local-secret.json` (gitignored), which only the
+Node test scripts read:
 
 ```bash
 export OP_SECRET_REF="op://<your-vault>/<your-item>/credential"
 npm run sync-key
-npm run build
 ```
 
 `OP_SECRET_REF` defaults to `op://Dev Secrets/TypeSafe AI/credential`.

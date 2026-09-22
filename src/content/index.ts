@@ -3,7 +3,8 @@ import {
   getSettings,
   getCachedQualification
 } from '../services/storage';
-import { injectPillBadge, setupTweetCollapse } from './badge';
+import { injectPillBadge, setupTweetCollapse, clearTweetCollapse, isUnsure } from './badge';
+import type { CollapseReason } from './badge';
 import type { ExtensionSettings, QualificationResult } from '../types';
 
 const DWELL_MS = 450;        // how long a tweet must stay in view before we pay to score it
@@ -22,6 +23,14 @@ const intersectionObserver = new IntersectionObserver(
 
     for (const entry of entries) {
       const el = entry.target as HTMLElement;
+
+      // X removes tweets from the DOM as you scroll. The observer holds a strong
+      // reference to every target, so drop the ones that are gone.
+      if (!el.isConnected) {
+        stopWatching(el);
+        continue;
+      }
+
       if (entry.isIntersecting && entry.intersectionRatio >= 0.15) {
         if (!dwellTimers.has(el)) {
           const timer = setTimeout(() => {
@@ -42,6 +51,16 @@ const intersectionObserver = new IntersectionObserver(
   { threshold: [0.15] }
 );
 
+/** Stops the viewport watch on a tweet that is scored, or no longer on the page. */
+function stopWatching(article: HTMLElement) {
+  intersectionObserver.unobserve(article);
+  const timer = dwellTimers.get(article);
+  if (timer) {
+    clearTimeout(timer);
+    dwellTimers.delete(article);
+  }
+}
+
 async function init() {
   currentSettings = await getSettings();
 
@@ -51,6 +70,7 @@ async function init() {
       if (area === 'local' && changes.typesafe_settings) {
         currentSettings = { ...currentSettings, ...changes.typesafe_settings.newValue };
         scanTweets();
+        reapplyScoredTweets();
       }
     });
   }
@@ -108,7 +128,7 @@ async function processTweetArticle(article: HTMLElement) {
   if (article.dataset.tsProcessed === 'true') return;
 
   const metadata = parseTweetElement(article);
-  if (!metadata || !metadata.text) return;
+  if (!metadata || !(metadata.text || metadata.quotedText)) return;
 
   article.dataset.tsProcessed = 'true';
   article.dataset.tsTweetId = metadata.id;
@@ -138,20 +158,26 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
   const userNameContainer = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   if (!userNameContainer) return;
 
-  // Check cache again
-  const cached = await getCachedQualification(tweetId);
+  // Taken before the first await, so the dwell timer and a click that land
+  // together cannot both get past the check above. Held until the reply
+  // arrives: sendMessage returns immediately, so releasing this in a finally
+  // block would free the lock before the API has answered and let the same
+  // tweet be sent — and billed — more than once.
+  processingTweets.add(tweetId);
+
+  const cached = await getCachedQualification(tweetId).catch(() => null);
   if (cached) {
+    processingTweets.delete(tweetId);
+    stopWatching(article);
     applyQualification(article, userNameContainer, cached);
     return;
   }
 
   const metadata = parseTweetElement(article);
-  if (!metadata || !metadata.text) return;
-
-  // Held until the reply arrives. sendMessage returns immediately, so releasing
-  // this in a finally block would free the lock before the API has answered and
-  // let the same tweet be sent — and billed — more than once.
-  processingTweets.add(tweetId);
+  if (!metadata || !(metadata.text || metadata.quotedText)) {
+    processingTweets.delete(tweetId);
+    return;
+  }
 
   const failed = (reason: string) => {
     console.warn(`[X-Ray] Qualification failed for ${tweetId}:`, reason);
@@ -169,6 +195,7 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
 
       if (response && response.success && response.result) {
         processingTweets.delete(tweetId);
+        stopWatching(article);
         applyQualification(article, userNameContainer, response.result);
         return;
       }
@@ -192,22 +219,42 @@ function applyQualification(
     injectPillBadge(headerContainer, result);
   }
 
-  // 2. Check Auto-Collapse for Engagement Bait
-  if (
-    currentSettings.autoCollapseBait &&
-    result.category === 'engagement_bait' &&
-    result.categoryConfidence >= (currentSettings.minBaitThreshold || 0.7)
-  ) {
-    setupTweetCollapse(article, 'bait', result);
+  // 2. Collapse for the first reason that applies
+  const reason = collapseReason(result, currentSettings);
+  if (reason) {
+    setupTweetCollapse(article, reason, result, currentSettings.focusMinDepth);
   }
+}
 
-  // 3. Check Auto-Collapse for Spam
-  if (
-    currentSettings.autoCollapseSpam &&
-    result.category === 'spam' &&
-    result.categoryConfidence >= 0.75
-  ) {
-    setupTweetCollapse(article, 'spam', result);
+/** Why a scored post should be hidden, or null to show it. Order is priority. */
+function collapseReason(result: QualificationResult, settings: ExtensionSettings): CollapseReason | null {
+  // An "Unsure" badge must never come with a "Spam hidden" banner.
+  const confident = !isUnsure(result) && result.categoryConfidence >= (settings.minBaitThreshold || 0.7);
+
+  if (settings.autoCollapseSpam && result.category === 'spam' && confident) return 'spam';
+  if (settings.autoCollapseBait && result.category === 'engagement_bait' && confident) return 'bait';
+  if (settings.autoCollapseSlop && result.category === 'ai_slop' && confident) return 'slop';
+  if (settings.focusMode && result.substanceDepthNormalized < settings.focusMinDepth) return 'focus';
+  return null;
+}
+
+/**
+ * Settings changed in the popup: re-judge every tweet already scored on the
+ * page, so moving the focus bar or a toggle takes effect without a reload.
+ * Reads come from the local cache, so this costs no API calls.
+ */
+async function reapplyScoredTweets() {
+  const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"][data-ts-tweet-id]');
+  for (const article of Array.from(articles)) {
+    const tweetId = article.dataset.tsTweetId;
+    const header = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
+    if (!tweetId || !header) continue;
+
+    const cached = await getCachedQualification(tweetId).catch(() => null);
+    if (!cached) continue;
+
+    clearTweetCollapse(article);
+    applyQualification(article, header, cached);
   }
 }
 

@@ -12,6 +12,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const toggleBait = document.getElementById('toggleBait') as HTMLInputElement;
   const toggleSpam = document.getElementById('toggleSpam') as HTMLInputElement;
   const toggleAds = document.getElementById('toggleAds') as HTMLInputElement;
+  const toggleSlop = document.getElementById('toggleSlop') as HTMLInputElement;
+  const toggleFocus = document.getElementById('toggleFocus') as HTMLInputElement;
+  const focusDepthRow = document.getElementById('focusDepthRow') as HTMLElement;
+  const focusDepthRange = document.getElementById('focusDepthRange') as HTMLInputElement;
+  const focusDepthVal = document.getElementById('focusDepthVal') as HTMLElement;
+  const thresholdRange = document.getElementById('thresholdRange') as HTMLInputElement;
+  const thresholdVal = document.getElementById('thresholdVal') as HTMLElement;
 
   const versionTag = document.getElementById('versionTag') as HTMLElement;
   const keyTitle = document.getElementById('keyTitle') as HTMLElement;
@@ -43,14 +50,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   toggleBait.checked = settings.autoCollapseBait;
   toggleSpam.checked = settings.autoCollapseSpam;
   toggleAds.checked = settings.autoCollapseAds;
+  toggleSlop.checked = settings.autoCollapseSlop;
+  toggleFocus.checked = settings.focusMode;
+  focusDepthRange.value = String(settings.focusMinDepth);
+  thresholdRange.value = String(settings.minBaitThreshold);
+
+  const showFocusDepth = () => {
+    focusDepthVal.textContent = `${Number(focusDepthRange.value).toFixed(1)} / 5`;
+    focusDepthRow.classList.toggle('disabled', !toggleFocus.checked);
+  };
+  const showThreshold = () => {
+    thresholdVal.textContent = `${Math.round(Number(thresholdRange.value) * 100)}% sure`;
+  };
+  showFocusDepth();
+  showThreshold();
 
   function refreshKeyDisplay(key?: string) {
     if (key && key.trim()) {
-      apiKeyInput.value = key;
+      apiKeyInput.value = '';
       apiStatus.textContent = 'Active';
       apiStatus.className = 'status-badge';
       keyTitle.textContent = 'TypeSafe AI Connected';
-      keyHint.textContent = `${key.slice(0, 14)}... (from 1Password)`;
+      keyHint.textContent = `Key ending …${key.slice(-4)}`;
       keyInputGroup.classList.add('hidden');
       toggleEditKeyBtn.textContent = 'Change';
     } else {
@@ -85,6 +106,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   toggleAds.addEventListener('change', () => {
     saveSettings({ autoCollapseAds: toggleAds.checked });
+  });
+
+  toggleSlop.addEventListener('change', () => {
+    saveSettings({ autoCollapseSlop: toggleSlop.checked });
+  });
+
+  toggleFocus.addEventListener('change', () => {
+    showFocusDepth();
+    saveSettings({ focusMode: toggleFocus.checked });
+  });
+
+  // 'input' updates the label while dragging; 'change' saves once on release,
+  // because every save makes open X tabs re-judge all scored tweets.
+  focusDepthRange.addEventListener('input', showFocusDepth);
+  focusDepthRange.addEventListener('change', () => {
+    saveSettings({ focusMinDepth: Number(focusDepthRange.value) });
+  });
+
+  thresholdRange.addEventListener('input', showThreshold);
+  thresholdRange.addEventListener('change', () => {
+    saveSettings({ minBaitThreshold: Number(thresholdRange.value) });
   });
 
   // 3. API Key Save

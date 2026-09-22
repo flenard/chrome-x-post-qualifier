@@ -6,6 +6,8 @@ export interface PostMetadata {
   authorName: string;
   authorHandle: string;
   permalink?: string;
+  quotedText?: string;   // text of a quoted post, if this post quotes one
+  quotedHandle?: string; // @handle of the quoted post's author
   hasLinks: boolean;
   hasMedia: boolean;
   isThread: boolean;
@@ -33,7 +35,10 @@ export interface ExtensionSettings {
   autoCollapseBait: boolean;
   autoCollapseSpam: boolean;
   autoCollapseAds: boolean;
-  minBaitThreshold: number; // 0.0 to 1.0 (e.g. 0.75)
+  autoCollapseSlop: boolean;
+  minBaitThreshold: number; // 0.0 to 1.0: confidence needed to hide bait, AI slop or spam
+  focusMode: boolean;       // hide every scored post below focusMinDepth
+  focusMinDepth: number;    // 1 to 5, same scale as substanceDepthNormalized
   showInFeedBadge: boolean;
 }
 
