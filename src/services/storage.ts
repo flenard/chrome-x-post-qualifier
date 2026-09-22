@@ -53,16 +53,33 @@ function storageRemove(keys: string[]): Promise<void> {
   });
 }
 
+/**
+ * Every read-modify-write below runs through this queue. Without it, two
+ * results finishing together both read the same stats or cache index, and the
+ * second write erases the first: stats undercount and evicted ids go missing,
+ * so the cache grows without bound again. The queue is per JS context; the
+ * service worker does nearly all the writes.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(fn, fn);
+  writeQueue = run.catch(() => undefined);
+  return run;
+}
+
 export async function getSettings(): Promise<ExtensionSettings> {
   if (!hasStorage()) return DEFAULT_SETTINGS;
   const res = await storageGet<Record<string, Partial<ExtensionSettings>>>([SETTINGS_KEY]);
   return { ...DEFAULT_SETTINGS, ...(res[SETTINGS_KEY] || {}) };
 }
 
-export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
-  if (!hasStorage()) return;
-  const current = await getSettings();
-  await storageSet({ [SETTINGS_KEY]: { ...current, ...settings } });
+export function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  return serialized(async () => {
+    const current = await getSettings();
+    await storageSet({ [SETTINGS_KEY]: { ...current, ...settings } });
+  });
 }
 
 export async function getStats(): Promise<ExtensionStats> {
@@ -71,34 +88,38 @@ export async function getStats(): Promise<ExtensionStats> {
   return { ...DEFAULT_STATS, ...(res[STATS_KEY] || {}) };
 }
 
-export async function recordAnalysis(result: QualificationResult): Promise<ExtensionStats> {
-  const current = await getStats();
-  const cost = result.costUsd || calculateCostUsd(result.inputTokens, result.outputTokens);
+export function recordAnalysis(result: QualificationResult): Promise<ExtensionStats> {
+  return serialized(async () => {
+    const current = await getStats();
+    const cost = result.costUsd || calculateCostUsd(result.inputTokens, result.outputTokens);
 
-  const updated: ExtensionStats = {
-    totalPostsAnalyzed: current.totalPostsAnalyzed + 1,
-    totalInputTokens: current.totalInputTokens + (result.inputTokens || 0),
-    totalOutputTokens: current.totalOutputTokens + (result.outputTokens || 0),
-    totalCostUsd: current.totalCostUsd + cost,
-    totalBaitCollapsed: current.totalBaitCollapsed + (result.category === 'engagement_bait' ? 1 : 0),
-    totalSpamCollapsed: current.totalSpamCollapsed + (result.category === 'spam' ? 1 : 0),
-    totalAdsBlocked: current.totalAdsBlocked
-  };
+    const updated: ExtensionStats = {
+      totalPostsAnalyzed: current.totalPostsAnalyzed + 1,
+      totalInputTokens: current.totalInputTokens + (result.inputTokens || 0),
+      totalOutputTokens: current.totalOutputTokens + (result.outputTokens || 0),
+      totalCostUsd: current.totalCostUsd + cost,
+      totalBaitCollapsed: current.totalBaitCollapsed + (result.category === 'engagement_bait' ? 1 : 0),
+      totalSpamCollapsed: current.totalSpamCollapsed + (result.category === 'spam' ? 1 : 0),
+      totalAdsBlocked: current.totalAdsBlocked
+    };
 
-  if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
-  return updated;
+    if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
+    return updated;
+  });
 }
 
-export async function recordAdBlocked(): Promise<ExtensionStats> {
-  const current = await getStats();
-  const updated: ExtensionStats = { ...current, totalAdsBlocked: current.totalAdsBlocked + 1 };
-  if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
-  return updated;
+export function recordAdBlocked(): Promise<ExtensionStats> {
+  return serialized(async () => {
+    const current = await getStats();
+    const updated: ExtensionStats = { ...current, totalAdsBlocked: current.totalAdsBlocked + 1 };
+    if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
+    return updated;
+  });
 }
 
-export async function resetStats(): Promise<void> {
-  if (!hasStorage()) return;
-  await storageSet({ [STATS_KEY]: DEFAULT_STATS });
+export function resetStats(): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  return serialized(() => storageSet({ [STATS_KEY]: DEFAULT_STATS }));
 }
 
 export async function getCachedQualification(tweetId: string): Promise<QualificationResult | null> {
@@ -116,29 +137,32 @@ export async function getCachedQualification(tweetId: string): Promise<Qualifica
  * storage area. Without this the cache grows until it hits the 10MB quota and
  * every later write fails.
  */
-export async function setCachedQualification(tweetId: string, result: QualificationResult): Promise<void> {
-  if (!hasStorage()) return;
+export function setCachedQualification(tweetId: string, result: QualificationResult): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  return serialized(async () => {
+    const key = `${CACHE_PREFIX}${tweetId}`;
+    await storageSet({ [key]: result });
 
-  const key = `${CACHE_PREFIX}${tweetId}`;
-  await storageSet({ [key]: result });
+    const res = await storageGet<Record<string, string[]>>([CACHE_INDEX_KEY]);
+    const index = (res[CACHE_INDEX_KEY] || []).filter((id) => id !== tweetId);
+    index.push(tweetId);
 
-  const res = await storageGet<Record<string, string[]>>([CACHE_INDEX_KEY]);
-  const index = (res[CACHE_INDEX_KEY] || []).filter((id) => id !== tweetId);
-  index.push(tweetId);
+    if (index.length > MAX_CACHE_ITEMS) {
+      const evicted = index.splice(0, index.length - MAX_CACHE_ITEMS);
+      await storageRemove(evicted.map((id) => `${CACHE_PREFIX}${id}`));
+    }
 
-  if (index.length > MAX_CACHE_ITEMS) {
-    const evicted = index.splice(0, index.length - MAX_CACHE_ITEMS);
-    await storageRemove(evicted.map((id) => `${CACHE_PREFIX}${id}`));
-  }
-
-  await storageSet({ [CACHE_INDEX_KEY]: index });
+    await storageSet({ [CACHE_INDEX_KEY]: index });
+  });
 }
 
-export async function clearCache(): Promise<void> {
-  if (!hasStorage()) return;
-  const items = await storageGet<Record<string, unknown>>(null);
-  const keysToRemove = Object.keys(items).filter(
-    (k) => k.startsWith(CACHE_PREFIX) || k === CACHE_INDEX_KEY
-  );
-  if (keysToRemove.length > 0) await storageRemove(keysToRemove);
+export function clearCache(): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  return serialized(async () => {
+    const items = await storageGet<Record<string, unknown>>(null);
+    const keysToRemove = Object.keys(items).filter(
+      (k) => k.startsWith(CACHE_PREFIX) || k === CACHE_INDEX_KEY
+    );
+    if (keysToRemove.length > 0) await storageRemove(keysToRemove);
+  });
 }
