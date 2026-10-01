@@ -1,9 +1,14 @@
 import { parseTweetElement, detectIsAd } from '../services/tweet-parser';
 import {
   getSettings,
-  getCachedQualification
+  getCachedQualification,
+  getTrustedHandles,
+  trustHandle,
+  untrustHandle,
+  normalizeHandle,
+  TRUSTED_KEY
 } from '../services/storage';
-import { injectPillBadge, setupTweetCollapse, clearTweetCollapse, isUnsure } from './badge';
+import { injectPillBadge, injectTrustedBadge, setupTweetCollapse, clearTweetCollapse, isUnsure } from './badge';
 import type { CollapseReason } from './badge';
 import type { ExtensionSettings, QualificationResult } from '../types';
 
@@ -11,6 +16,7 @@ const DWELL_MS = 450;        // how long a tweet must stay in view before we pay
 const SCAN_DEBOUNCE_MS = 100; // coalesce DOM mutation bursts into one scan
 
 let currentSettings: ExtensionSettings | null = null;
+let trustedHandles = new Set<string>();
 const processingTweets = new Set<string>();
 type TimerId = ReturnType<typeof setTimeout>;
 
@@ -63,14 +69,22 @@ function stopWatching(article: HTMLElement) {
 
 async function init() {
   currentSettings = await getSettings();
+  trustedHandles = new Set(await getTrustedHandles().catch((err) => {
+    console.warn('[X-Ray] Could not read trusted accounts:', err);
+    return [];
+  }));
 
-  // Listen for settings changes from popup
+  // Listen for settings changes from popup, and trust changes from any tab
   if (typeof chrome !== 'undefined' && chrome.storage) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes.typesafe_settings) {
         currentSettings = { ...currentSettings, ...changes.typesafe_settings.newValue };
         scanTweets();
-        reapplyScoredTweets();
+        rejudgeTweets();
+      }
+      if (area === 'sync' && changes[TRUSTED_KEY]) {
+        trustedHandles = new Set(changes[TRUSTED_KEY].newValue || []);
+        rejudgeTweets();
       }
     });
   }
@@ -133,6 +147,9 @@ async function processTweetArticle(article: HTMLElement) {
   article.dataset.tsProcessed = 'true';
   article.dataset.tsTweetId = metadata.id;
 
+  // Trusted accounts are never sent to the API.
+  if (showIfTrusted(article, userNameContainer)) return;
+
   // Check cache first
   const cached = await getCachedQualification(metadata.id);
   if (cached) {
@@ -140,13 +157,35 @@ async function processTweetArticle(article: HTMLElement) {
     return;
   }
 
-  // If not cached:
-  if (currentSettings.autoQualify) {
-    injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
-    intersectionObserver.observe(article);
-  } else {
-    injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
-  }
+  showUnscored(article, userNameContainer);
+}
+
+/** Not cached yet: a "Qualify" pill, plus the viewport watch in auto mode. */
+function showUnscored(article: HTMLElement, header: HTMLElement) {
+  injectPillBadge(header, null, () => handleQualifyTweet(article, true));
+  if (currentSettings?.autoQualify) intersectionObserver.observe(article);
+}
+
+/** The author's @handle as shown (original case), without "@". */
+function authorHandle(header: HTMLElement): string | null {
+  const m = header.innerText.match(/@(\w+)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * If the author is trusted: show the "Trusted" badge, undo any collapse, stop
+ * scoring. Returns true when it handled the tweet.
+ */
+function showIfTrusted(article: HTMLElement, header: HTMLElement): boolean {
+  const handle = authorHandle(header);
+  if (!handle || !trustedHandles.has(normalizeHandle(handle))) return false;
+
+  stopWatching(article);
+  clearTweetCollapse(article);
+  injectTrustedBadge(header, handle, () => {
+    untrustHandle(handle).catch((err) => console.warn('[X-Ray] Could not remove trust:', err));
+  });
+  return true;
 }
 
 async function handleQualifyTweet(article: HTMLElement, force: boolean) {
@@ -157,6 +196,7 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
 
   const userNameContainer = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
   if (!userNameContainer) return;
+  if (showIfTrusted(article, userNameContainer)) return;
 
   // Taken before the first await, so the dwell timer and a click that land
   // together cannot both get past the check above. Held until the reply
@@ -213,15 +253,27 @@ function applyQualification(
   result: QualificationResult
 ) {
   if (!currentSettings) return;
+  if (showIfTrusted(article, headerContainer)) return;
 
   // 1. Render Badge
   if (currentSettings.showInFeedBadge) {
-    injectPillBadge(headerContainer, result);
+    const handle = authorHandle(headerContainer);
+    const trust = handle
+      ? {
+          handle,
+          onTrust: () => {
+            trustHandle(handle).catch((err) => console.warn('[X-Ray] Could not save trust:', err));
+          }
+        }
+      : undefined;
+    injectPillBadge(headerContainer, result, undefined, trust);
   }
 
   // 2. Collapse for the first reason that applies
+  // Never hide the post the user opened on purpose (its own /status/ page).
+  const isOpenedPost = location.pathname.includes(`/status/${article.dataset.tsTweetId}`);
   const reason = collapseReason(result, currentSettings);
-  if (reason) {
+  if (reason && !isOpenedPost) {
     setupTweetCollapse(article, reason, result, currentSettings.focusMinDepth);
   }
 }
@@ -239,22 +291,23 @@ function collapseReason(result: QualificationResult, settings: ExtensionSettings
 }
 
 /**
- * Settings changed in the popup: re-judge every tweet already scored on the
- * page, so moving the focus bar or a toggle takes effect without a reload.
- * Reads come from the local cache, so this costs no API calls.
+ * Settings or the trusted list changed: re-judge every tweet already on the
+ * page, so a toggle, the focus bar or a "Not spam" click takes effect without
+ * a reload. Scores come from the local cache, so this costs no API calls.
  */
-async function reapplyScoredTweets() {
+async function rejudgeTweets() {
   const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"][data-ts-tweet-id]');
   for (const article of Array.from(articles)) {
     const tweetId = article.dataset.tsTweetId;
     const header = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
-    if (!tweetId || !header) continue;
+    if (!tweetId || !header || processingTweets.has(tweetId)) continue;
+
+    if (showIfTrusted(article, header)) continue;
 
     const cached = await getCachedQualification(tweetId).catch(() => null);
-    if (!cached) continue;
-
     clearTweetCollapse(article);
-    applyQualification(article, header, cached);
+    if (cached) applyQualification(article, header, cached);
+    else showUnscored(article, header);
   }
 }
 

@@ -404,3 +404,35 @@ body {
 .btn-text:hover {
   color: #94a3b8;
 }
+
+/* Trusted accounts */
+.trusted-empty {
+  padding: 10px 12px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.trusted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.trusted-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.trusted-item:last-child {
+  border-bottom: none;
+}
+.trusted-item a {
+  color: #34d399;
+  text-decoration: none;
+}
+.trusted-item a:hover {
+  text-decoration: underline;
+}

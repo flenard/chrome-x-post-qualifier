@@ -166,3 +166,60 @@ export function clearCache(): Promise<void> {
     if (keysToRemove.length > 0) await storageRemove(keysToRemove);
   });
 }
+
+/**
+ * Accounts the user marked "not spam". Kept in storage.sync, not local:
+ * local is wiped when the extension is removed, and this list is the one
+ * thing the user built by hand. Handles are stored lowercase, without "@".
+ */
+export const TRUSTED_KEY = 'ts_trusted_handles';
+
+export function normalizeHandle(handle: string): string {
+  return handle.trim().replace(/^@/, '').toLowerCase();
+}
+
+export function getTrustedHandles(): Promise<string[]> {
+  if (!hasStorage()) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    chrome.storage.sync.get([TRUSTED_KEY], (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(`storage.sync.get failed: ${err.message}`));
+        return;
+      }
+      resolve(Array.isArray(res[TRUSTED_KEY]) ? res[TRUSTED_KEY] : []);
+    });
+  });
+}
+
+function setTrustedHandles(handles: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.sync.set({ [TRUSTED_KEY]: handles }, () => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(`storage.sync.set failed: ${err.message}`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export function trustHandle(handle: string): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  const h = normalizeHandle(handle);
+  return serialized(async () => {
+    const current = await getTrustedHandles();
+    if (!h || current.includes(h)) return;
+    await setTrustedHandles([...current, h].sort());
+  });
+}
+
+export function untrustHandle(handle: string): Promise<void> {
+  if (!hasStorage()) return Promise.resolve();
+  const h = normalizeHandle(handle);
+  return serialized(async () => {
+    const current = await getTrustedHandles();
+    await setTrustedHandles(current.filter((x) => x !== h));
+  });
+}

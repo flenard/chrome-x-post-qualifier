@@ -1,4 +1,7 @@
-import { getSettings, saveSettings, getStats, resetStats, clearCache } from '../services/storage';
+import {
+  getSettings, saveSettings, getStats, resetStats, clearCache,
+  getTrustedHandles, untrustHandle, TRUSTED_KEY
+} from '../services/storage';
 
 document.addEventListener('DOMContentLoaded', async () => {
   const apiStatus = document.getElementById('apiStatus') as HTMLElement;
@@ -167,11 +170,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     adsVal.textContent = currentStats.totalAdsBlocked.toLocaleString();
   }
 
+  // 5. Trusted accounts
+  const trustedList = document.getElementById('trustedList') as HTMLUListElement;
+  const trustedEmpty = document.getElementById('trustedEmpty') as HTMLElement;
+
+  function renderTrusted(handles: string[]) {
+    trustedEmpty.style.display = handles.length ? 'none' : 'block';
+    trustedList.replaceChildren(...handles.map((handle) => {
+      const li = document.createElement('li');
+      li.className = 'trusted-item';
+
+      const link = document.createElement('a');
+      link.href = `https://x.com/${handle}`;
+      link.target = '_blank';
+      link.textContent = `@${handle}`;
+
+      const remove = document.createElement('button');
+      remove.className = 'btn-text';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => {
+        untrustHandle(handle).catch((err) => console.warn('[X-Ray] Could not remove trust:', err));
+      });
+
+      li.append(link, remove);
+      return li;
+    }));
+  }
+
+  renderTrusted(await getTrustedHandles().catch(() => []));
+
   // Listen for real-time stats updates from background worker
   if (typeof chrome !== 'undefined' && chrome.storage) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes.typesafe_stats?.newValue) {
         updateStatsDisplay(changes.typesafe_stats.newValue);
+      }
+      if (area === 'sync' && changes[TRUSTED_KEY]) {
+        renderTrusted(changes[TRUSTED_KEY].newValue || []);
       }
     });
   }

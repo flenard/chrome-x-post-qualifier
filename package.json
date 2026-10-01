@@ -1,6 +1,6 @@
 {
   "name": "chrome-x-post-qualifier",
-  "version": "1.0.5",
+  "version": "1.0.7",
   "description": "Qualify X (Twitter) posts in real time using TypeSafe AI System One. Filter spam, engagement bait, and ads.",
   "type": "module",
   "scripts": {

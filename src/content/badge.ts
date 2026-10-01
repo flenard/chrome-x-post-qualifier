@@ -91,11 +91,7 @@ function leaningText(result: QualificationResult): string {
 /**
  * Creates or updates the Shadow DOM badge inside a tweet
  */
-export function injectPillBadge(
-  headerContainer: HTMLElement,
-  result: QualificationResult | null,
-  onManualTrigger?: () => void
-): HTMLElement {
+function badgeShadow(headerContainer: HTMLElement): ShadowRoot {
   let badgeHost = headerContainer.querySelector<HTMLElement>('.ts-qualifier-badge-host');
   if (!badgeHost) {
     badgeHost = document.createElement('div');
@@ -109,7 +105,16 @@ export function injectPillBadge(
   }
 
   // Use shadow root to isolate styles
-  const shadow = badgeHost.shadowRoot || badgeHost.attachShadow({ mode: 'open' });
+  return badgeHost.shadowRoot || badgeHost.attachShadow({ mode: 'open' });
+}
+
+export function injectPillBadge(
+  headerContainer: HTMLElement,
+  result: QualificationResult | null,
+  onManualTrigger?: () => void,
+  trust?: TrustAction
+): void {
+  const shadow = badgeShadow(headerContainer);
 
   if (!result) {
     // Loading or manual trigger state
@@ -131,7 +136,7 @@ export function injectPillBadge(
         onManualTrigger();
       });
     }
-    return badgeHost;
+    return;
   }
 
   const theme = themeFor(result);
@@ -154,54 +159,18 @@ export function injectPillBadge(
     triggerBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      openPortalPopover(triggerBtn, result);
+      openPortalPopover(triggerBtn, result, trust);
     });
   }
-
-  return badgeHost;
 }
 
-let activePopoverCleanup: (() => void) | null = null;
+/** "Not spam": trust the post's author. Handles are [A-Za-z0-9_] only, so safe in HTML. */
+export interface TrustAction {
+  handle: string;
+  onTrust: () => void;
+}
 
-function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
-  if (activePopoverCleanup) {
-    activePopoverCleanup();
-    activePopoverCleanup = null;
-  }
-
-  const theme = themeFor(result);
-  const confidencePct = Math.round(result.categoryConfidence * 100);
-  const subtitle = isUnsure(result)
-    ? `${leaningText(result)} · no clear winner`
-    : `${confidencePct}% confidence by TypeSafe AI`;
-  const depth = result.substanceDepthNormalized.toFixed(1);
-
-  const portalHost = document.createElement('div');
-  portalHost.className = 'ts-portal-popover-host';
-  portalHost.style.position = 'fixed';
-  portalHost.style.zIndex = '2147483647';
-  portalHost.style.pointerEvents = 'auto';
-
-  // Calculate coordinates relative to viewport
-  const rect = anchorEl.getBoundingClientRect();
-  const width = 280;
-  let left = rect.right - width;
-  if (left < 12) left = 12;
-  if (left + width > window.innerWidth - 12) {
-    left = window.innerWidth - width - 12;
-  }
-
-  let top = rect.bottom + 8;
-  if (top + 240 > window.innerHeight) {
-    top = Math.max(12, rect.top - 240 - 8);
-  }
-
-  portalHost.style.top = `${top}px`;
-  portalHost.style.left = `${left}px`;
-
-  const shadow = portalHost.attachShadow({ mode: 'open' });
-  shadow.innerHTML = `
-    <style>
+const POPOVER_CSS = `
       * {
         box-sizing: border-box;
         margin: 0;
@@ -283,43 +252,77 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
         display: flex;
         justify-content: space-between;
       }
-    </style>
-    <div class="ts-popover-card">
-      <div class="ts-popover-header">
-        <span style="font-size: 20px;">${theme.emoji}</span>
-        <div style="flex:1;">
-          <div class="ts-popover-title" style="color: ${theme.text};">${theme.label}</div>
-          <div class="ts-popover-subtitle">${subtitle}</div>
-        </div>
-        <button class="ts-close-btn">&times;</button>
-      </div>
+      .ts-trust-btn {
+        width: 100%;
+        margin-top: 10px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(52, 211, 153, 0.4);
+        background: rgba(16, 185, 129, 0.12);
+        color: #34d399;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .ts-trust-btn:hover {
+        background: rgba(16, 185, 129, 0.22);
+      }
+      .ts-trust-btn.ts-untrust {
+        border-color: #334155;
+        background: transparent;
+        color: #94a3b8;
+      }
+      .ts-trust-btn.ts-untrust:hover {
+        color: #f8fafc;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .ts-trust-hint {
+        font-size: 10.5px;
+        color: #64748b;
+        margin-top: 5px;
+        text-align: center;
+      }
 
-      <div class="ts-meter-group">
-        <div class="ts-meter-label">
-          <span>Substance & Depth</span>
-          <strong style="color:${theme.text};">${depth} / 5.0</strong>
-        </div>
-        <div class="ts-progress-bar">
-          <div class="ts-progress-fill" style="width: ${(result.substanceDepthNormalized / 5) * 100}%; background: ${theme.text};"></div>
-        </div>
-      </div>
+    `;
 
-      <div class="ts-meter-group">
-        <div class="ts-meter-label">
-          <span>Bait / Noise Likelihood</span>
-          <strong>${Math.round(result.isBaitOrSpamProbability * 100)}%</strong>
-        </div>
-        <div class="ts-progress-bar">
-          <div class="ts-progress-fill" style="width: ${result.isBaitOrSpamProbability * 100}%; background: ${result.isBaitOrSpamProbability > 0.6 ? '#f87171' : '#34d399'};"></div>
-        </div>
-      </div>
+let activePopoverCleanup: (() => void) | null = null;
 
-      <div class="ts-cost-info">
-        <span>⚡ 1 pass evaluation</span>
-        <span>${(result.costUsd * 100).toFixed(4)}¢ (${result.inputTokens} tok)</span>
-      </div>
-    </div>
-  `;
+/**
+ * Mounts a popover card next to the anchor, in its own shadow root on <body>,
+ * and wires the shared close behaviour (outside click, scroll, Escape, ×).
+ * Returns the shadow root and the close function for extra buttons.
+ */
+function mountPopover(anchorEl: HTMLElement, cardHtml: string): { shadow: ShadowRoot; close: () => void } {
+  if (activePopoverCleanup) {
+    activePopoverCleanup();
+    activePopoverCleanup = null;
+  }
+
+  const portalHost = document.createElement('div');
+  portalHost.className = 'ts-portal-popover-host';
+  portalHost.style.position = 'fixed';
+  portalHost.style.zIndex = '2147483647';
+  portalHost.style.pointerEvents = 'auto';
+
+  // Calculate coordinates relative to viewport
+  const rect = anchorEl.getBoundingClientRect();
+  const width = 280;
+  let left = rect.right - width;
+  if (left < 12) left = 12;
+  if (left + width > window.innerWidth - 12) {
+    left = window.innerWidth - width - 12;
+  }
+
+  let top = rect.bottom + 8;
+  if (top + 290 > window.innerHeight) {
+    top = Math.max(12, rect.top - 290 - 8);
+  }
+
+  portalHost.style.top = `${top}px`;
+  portalHost.style.left = `${left}px`;
+
+  const shadow = portalHost.attachShadow({ mode: 'open' });
+  shadow.innerHTML = `<style>${POPOVER_CSS}</style>${cardHtml}`;
 
   document.body.appendChild(portalHost);
 
@@ -359,12 +362,117 @@ function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult) {
   }, 50);
 
   activePopoverCleanup = closePopover;
+  return { shadow, close: closePopover };
+}
+
+function openPortalPopover(anchorEl: HTMLElement, result: QualificationResult, trust?: TrustAction) {
+  const theme = themeFor(result);
+  const confidencePct = Math.round(result.categoryConfidence * 100);
+  const subtitle = isUnsure(result)
+    ? `${leaningText(result)} · no clear winner`
+    : `${confidencePct}% confidence by TypeSafe AI`;
+  const depth = result.substanceDepthNormalized.toFixed(1);
+
+  const { shadow, close } = mountPopover(anchorEl, `
+    <div class="ts-popover-card">
+      <div class="ts-popover-header">
+        <span style="font-size: 20px;">${theme.emoji}</span>
+        <div style="flex:1;">
+          <div class="ts-popover-title" style="color: ${theme.text};">${theme.label}</div>
+          <div class="ts-popover-subtitle">${subtitle}</div>
+        </div>
+        <button class="ts-close-btn">&times;</button>
+      </div>
+
+      <div class="ts-meter-group">
+        <div class="ts-meter-label">
+          <span>Substance & Depth</span>
+          <strong style="color:${theme.text};">${depth} / 5.0</strong>
+        </div>
+        <div class="ts-progress-bar">
+          <div class="ts-progress-fill" style="width: ${(result.substanceDepthNormalized / 5) * 100}%; background: ${theme.text};"></div>
+        </div>
+      </div>
+
+      <div class="ts-meter-group">
+        <div class="ts-meter-label">
+          <span>Bait / Noise Likelihood</span>
+          <strong>${Math.round(result.isBaitOrSpamProbability * 100)}%</strong>
+        </div>
+        <div class="ts-progress-bar">
+          <div class="ts-progress-fill" style="width: ${result.isBaitOrSpamProbability * 100}%; background: ${result.isBaitOrSpamProbability > 0.6 ? '#f87171' : '#34d399'};"></div>
+        </div>
+      </div>
+
+      <div class="ts-cost-info">
+        <span>⚡ 1 pass evaluation</span>
+        <span>${(result.costUsd * 100).toFixed(4)}¢ (${result.inputTokens} tok)</span>
+      </div>
+      ${trust ? `
+      <button class="ts-trust-btn">✓ Not spam · trust @${trust.handle}</button>
+      <div class="ts-trust-hint">Never score or hide this account again</div>` : ''}
+    </div>
+  `);
+
+  shadow.querySelector('.ts-trust-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    close();
+    trust?.onTrust();
+  });
+}
+
+function openTrustedPopover(anchorEl: HTMLElement, handle: string, onUntrust: () => void) {
+  const { shadow, close } = mountPopover(anchorEl, `
+    <div class="ts-popover-card">
+      <div class="ts-popover-header">
+        <span style="font-size: 20px;">✅</span>
+        <div style="flex:1;">
+          <div class="ts-popover-title" style="color: #34d399;">Trusted account</div>
+          <div class="ts-popover-subtitle">@${handle} · not scored, never hidden</div>
+        </div>
+        <button class="ts-close-btn">&times;</button>
+      </div>
+      <button class="ts-trust-btn ts-untrust">Remove trust</button>
+      <div class="ts-trust-hint">Their posts will be scored again</div>
+    </div>
+  `);
+
+  shadow.querySelector('.ts-trust-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    close();
+    onUntrust();
+  });
+}
+
+/** Badge for a post by a trusted account: no score, a click offers "Remove trust". */
+export function injectTrustedBadge(headerContainer: HTMLElement, handle: string, onUntrust: () => void): void {
+  const shadow = badgeShadow(headerContainer);
+  shadow.innerHTML = `
+    <style>${getBadgeStyles()}</style>
+    <button class="ts-badge" title="You marked @${handle} as not spam" style="background:${CATEGORY_THEMES.outstanding.bg}; border-color:${CATEGORY_THEMES.outstanding.border}; color:${CATEGORY_THEMES.outstanding.text};">
+      <span>✓</span>
+      <span>Trusted</span>
+    </button>
+  `;
+  const btn = shadow.querySelector<HTMLButtonElement>('.ts-badge');
+  btn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    openTrustedPopover(btn, handle, onUntrust);
+  });
 }
 
 /**
  * Collapses a tweet element and injects a sleek, native-feeling reveal banner
  */
 export type CollapseReason = 'ad' | 'bait' | 'spam' | 'slop' | 'focus';
+
+/**
+ * Tweets the user chose to show this session. X rebuilds a tweet's <article>
+ * when it scrolls back into view or opens the post page (clicking a video
+ * does this), and the new element would otherwise be hidden again.
+ */
+const revealedTweetIds = new Set<string>();
 
 export function setupTweetCollapse(
   article: HTMLElement,
@@ -373,6 +481,8 @@ export function setupTweetCollapse(
   focusMinDepth?: number
 ): void {
   if (article.dataset.tsCollapsed === 'true') return;
+  const tweetId = article.dataset.tsTweetId;
+  if (tweetId && revealedTweetIds.has(tweetId)) return;
   article.dataset.tsCollapsed = 'true';
 
   let title = 'Engagement Bait hidden';
@@ -428,6 +538,10 @@ export function setupTweetCollapse(
   bannerHost.style.boxSizing = 'border-box';
   bannerHost.style.margin = '0';
   bannerHost.style.padding = '0';
+  // X lays the <article> out as a flex ROW (avatar column | content). Without
+  // a full-width basis plus wrap, the banner squeezes in as a narrow column
+  // beside the post once the post is shown again.
+  bannerHost.style.flex = '0 0 100%';
 
   const shadow = bannerHost.attachShadow({ mode: 'open' });
 
@@ -577,6 +691,7 @@ export function setupTweetCollapse(
   const mainContent = article.firstElementChild as HTMLElement;
   if (mainContent) {
     mainContent.style.display = 'none';
+    article.style.flexWrap = 'wrap';
     article.insertBefore(bannerHost, mainContent);
 
     const collapsedCard = shadow.querySelector<HTMLElement>('.ts-collapsed-card');
@@ -587,6 +702,7 @@ export function setupTweetCollapse(
     const showTweet = (e: Event) => {
       e.stopPropagation();
       e.preventDefault();
+      if (tweetId) revealedTweetIds.add(tweetId);
       mainContent.style.display = '';
       if (collapsedCard) collapsedCard.style.display = 'none';
       if (revealedBar) revealedBar.style.display = 'flex';
@@ -595,6 +711,7 @@ export function setupTweetCollapse(
     const hideTweet = (e: Event) => {
       e.stopPropagation();
       e.preventDefault();
+      if (tweetId) revealedTweetIds.delete(tweetId);
       mainContent.style.display = 'none';
       if (collapsedCard) collapsedCard.style.display = 'flex';
       if (revealedBar) revealedBar.style.display = 'none';
@@ -616,6 +733,7 @@ export function clearTweetCollapse(article: HTMLElement): void {
   const mainContent = banner?.nextElementSibling as HTMLElement | null;
   banner?.remove();
   if (mainContent) mainContent.style.display = '';
+  article.style.flexWrap = '';
   delete article.dataset.tsCollapsed;
 }
 
