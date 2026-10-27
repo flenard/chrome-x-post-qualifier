@@ -98,11 +98,24 @@ export function recordAnalysis(result: QualificationResult): Promise<ExtensionSt
       totalInputTokens: current.totalInputTokens + (result.inputTokens || 0),
       totalOutputTokens: current.totalOutputTokens + (result.outputTokens || 0),
       totalCostUsd: current.totalCostUsd + cost,
-      totalBaitCollapsed: current.totalBaitCollapsed + (result.category === 'engagement_bait' ? 1 : 0),
-      totalSpamCollapsed: current.totalSpamCollapsed + (result.category === 'spam' ? 1 : 0),
+      // Hidden counts come from recordHidden: a score is not a hide.
+      totalBaitCollapsed: current.totalBaitCollapsed,
+      totalSpamCollapsed: current.totalSpamCollapsed,
       totalAdsBlocked: current.totalAdsBlocked
     };
 
+    if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
+    return updated;
+  });
+}
+
+/** A scored post was hidden on the page. AI slop counts with bait. */
+export function recordHidden(reason: 'bait' | 'spam' | 'slop'): Promise<ExtensionStats> {
+  return serialized(async () => {
+    const current = await getStats();
+    const updated: ExtensionStats = reason === 'spam'
+      ? { ...current, totalSpamCollapsed: current.totalSpamCollapsed + 1 }
+      : { ...current, totalBaitCollapsed: current.totalBaitCollapsed + 1 };
     if (hasStorage()) await storageSet({ [STATS_KEY]: updated });
     return updated;
   });

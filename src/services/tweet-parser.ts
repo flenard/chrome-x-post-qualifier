@@ -6,7 +6,7 @@ export function parseTweetElement(article: HTMLElement): PostMetadata | null {
     const isAd = detectIsAd(article);
 
     // 2. Extract Tweet ID and permalink
-    const statusLink = article.querySelector<HTMLAnchorElement>('a[href*="/status/"]');
+    const statusLink = findOwnStatusLink(article);
     let tweetId = '';
     let permalink = '';
 
@@ -86,6 +86,28 @@ export function parseTweetElement(article: HTMLElement): PostMetadata | null {
   }
 }
 
+/**
+ * The post's own permalink: the link around its timestamp. On a post page the
+ * timestamp sits at the bottom, so the first /status/ link in the article is
+ * often another post's (a "From @user" video credit, a quoted post). Taking
+ * that one gives the post the wrong id, and a post the user chose to show
+ * gets hidden again when they click its video.
+ */
+function findOwnStatusLink(article: HTMLElement): HTMLAnchorElement | null {
+  for (const time of Array.from(article.querySelectorAll('time'))) {
+    const link = time.closest<HTMLAnchorElement>('a[href*="/status/"]');
+    const quoteBox = time.closest('[role="link"]');
+    if (link && !(quoteBox && article.contains(quoteBox))) return link;
+  }
+  return article.querySelector<HTMLAnchorElement>('a[href*="/status/"]');
+}
+
+/** The post id for a tweet article, as used for the cache and "Show post". */
+export function getTweetId(article: HTMLElement): string | null {
+  const match = findOwnStatusLink(article)?.href.match(/\/status\/(\d+)/);
+  return match ? match[1] : null;
+}
+
 function extractTexts(article: HTMLElement): { text: string; quotedText: string; quotedHandle: string } {
   let text = '';
   let quotedText = '';
@@ -107,37 +129,31 @@ function extractTexts(article: HTMLElement): { text: string; quotedText: string;
   return { text, quotedText, quotedHandle };
 }
 
+/**
+ * Media players carry ad-like markers on ordinary posts: X wraps videos in
+ * placementTracking, and a pre-roll ad shows its own "Ad" label inside the
+ * player. Reading those hid a normal post as "Promoted" the moment its video
+ * was played. Only the post's own chrome counts.
+ */
+const PLAYER_SELECTOR = '[data-testid="videoPlayer"], [data-testid="videoComponent"], [data-testid="placementTracking"]';
+
 export function detectIsAd(article: HTMLElement): boolean {
-  // Check common X / Twitter Ad selectors and text patterns
-  // 1. Direct "Ad" badge in the header or footer
-  const spans = article.querySelectorAll('span, div');
-  for (let i = 0; i < spans.length; i++) {
-    const el = spans[i];
+  // 1. The "Ad" / "Promoted" label: a leaf element holding just that word
+  const labels = article.querySelectorAll('span, div');
+  for (let i = 0; i < labels.length; i++) {
+    const el = labels[i];
+    if (el.children.length > 0) continue;
     const text = el.textContent?.trim();
-    if (text === 'Ad' || text === 'Promoted' || text === 'Sponsored') {
-      // Ensure it's not just a word inside a longer sentence
-      if (el.children.length === 0 && el.textContent?.trim() === text) {
-        return true;
-      }
+    if ((text === 'Ad' || text === 'Promoted' || text === 'Sponsored') && !el.closest(PLAYER_SELECTOR)) {
+      return true;
     }
   }
 
-  // 2. Data attributes or test IDs used for ads
-  if (
-    article.querySelector('[data-testid="placementTracking"]') ||
+  // 2. Labels X sets on promoted posts
+  return Boolean(
     article.querySelector('[aria-label="Sponsored"]') ||
     article.querySelector('[aria-label="Promoted"]')
-  ) {
-    return true;
-  }
-
-  // 3. Check for dynamic SVG or tracking tokens
-  const fullText = article.innerText;
-  if (fullText.includes('\nAd\n') || fullText.endsWith('\nAd') || fullText.startsWith('Ad\n')) {
-    return true;
-  }
-
-  return false;
+  );
 }
 
 function hashString(str: string): string {

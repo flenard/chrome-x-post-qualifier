@@ -1,4 +1,4 @@
-import { parseTweetElement, detectIsAd } from '../services/tweet-parser';
+import { parseTweetElement, detectIsAd, getTweetId } from '../services/tweet-parser';
 import {
   getSettings,
   getCachedQualification,
@@ -18,6 +18,8 @@ const SCAN_DEBOUNCE_MS = 100; // coalesce DOM mutation bursts into one scan
 let currentSettings: ExtensionSettings | null = null;
 let trustedHandles = new Set<string>();
 const processingTweets = new Set<string>();
+// X rebuilds a post each time it scrolls back into view. Count each post once.
+const countedHidden = new Set<string>();
 type TimerId = ReturnType<typeof setTimeout>;
 
 const dwellTimers = new Map<HTMLElement, TimerId>();
@@ -124,12 +126,20 @@ function scanTweets() {
 async function processTweetArticle(article: HTMLElement) {
   if (!currentSettings) return;
 
-  // 1. Handle Sponsored / Ads
-  if (detectIsAd(article)) {
+  // 1. Handle Sponsored / Ads. Decided once: a post already treated as a
+  // normal post stays one, so nothing that appears later (a video player,
+  // a pre-roll ad) can turn it into an ad and hide it.
+  if (article.dataset.tsProcessed !== 'true' && detectIsAd(article)) {
     if (currentSettings.autoCollapseAds && article.dataset.tsAdHandled !== 'true') {
       article.dataset.tsAdHandled = 'true';
+      // Without an id, "Show post" on an ad is forgotten when X rebuilds it.
+      const adId = getTweetId(article);
+      if (adId) article.dataset.tsTweetId = adId;
       setupTweetCollapse(article, 'ad');
-      chrome.runtime.sendMessage({ type: 'RECORD_AD' }).catch(() => {});
+      if (!adId || !countedHidden.has(adId)) {
+        if (adId) countedHidden.add(adId);
+        chrome.runtime.sendMessage({ type: 'RECORD_AD' }).catch(() => {});
+      }
     }
     return;
   }
@@ -166,10 +176,17 @@ function showUnscored(article: HTMLElement, header: HTMLElement) {
   if (currentSettings?.autoQualify) intersectionObserver.observe(article);
 }
 
-/** The author's @handle as shown (original case), without "@". */
+/**
+ * The author's @handle (original case), without "@". Read from the profile
+ * link, not the visible text: a display name is free text, so a spammer named
+ * "Giveaway @naval" would otherwise pass as the trusted @naval.
+ */
 function authorHandle(header: HTMLElement): string | null {
-  const m = header.innerText.match(/@(\w+)/);
-  return m ? m[1] : null;
+  for (const link of Array.from(header.querySelectorAll<HTMLAnchorElement>('a[href^="/"]'))) {
+    const m = link.getAttribute('href')?.match(/^\/(\w+)$/);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /**
@@ -275,6 +292,13 @@ function applyQualification(
   const reason = collapseReason(result, currentSettings);
   if (reason && !isOpenedPost) {
     setupTweetCollapse(article, reason, result, currentSettings.focusMinDepth);
+    // The popup's "Bait Filtered" counts posts actually hidden, not every
+    // bait/spam score (an unsure or below-threshold one is never hidden).
+    const tweetId = article.dataset.tsTweetId;
+    if (reason !== 'focus' && tweetId && !countedHidden.has(tweetId)) {
+      countedHidden.add(tweetId);
+      chrome.runtime.sendMessage({ type: 'RECORD_HIDDEN', reason }).catch(() => {});
+    }
   }
 }
 
@@ -296,11 +320,21 @@ function collapseReason(result: QualificationResult, settings: ExtensionSettings
  * a reload. Scores come from the local cache, so this costs no API calls.
  */
 async function rejudgeTweets() {
+  // Ads are never scored. Undo the hide when ad hiding was switched off;
+  // scanTweets hides them again when it is switched back on.
+  if (!currentSettings?.autoCollapseAds) {
+    for (const ad of Array.from(document.querySelectorAll<HTMLElement>('article[data-ts-ad-handled="true"]'))) {
+      clearTweetCollapse(ad);
+      delete ad.dataset.tsAdHandled;
+    }
+  }
+
   const articles = document.querySelectorAll<HTMLElement>('article[data-testid="tweet"][data-ts-tweet-id]');
   for (const article of Array.from(articles)) {
     const tweetId = article.dataset.tsTweetId;
     const header = article.querySelector<HTMLElement>('[data-testid="User-Name"]');
     if (!tweetId || !header || processingTweets.has(tweetId)) continue;
+    if (article.dataset.tsAdHandled === 'true' || detectIsAd(article)) continue;
 
     if (showIfTrusted(article, header)) continue;
 

@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, setCachedQualification, getCachedQualification, recordAnalysis, recordAdBlocked } from '../services/storage';
+import { getSettings, saveSettings, setCachedQualification, getCachedQualification, recordAnalysis, recordAdBlocked, recordHidden } from '../services/storage';
 import { qualifyTweet } from '../api/typesafe';
 import type { PostMetadata, QualificationResult } from '../types';
 
@@ -23,6 +23,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then((result) => sendResponse({ success: true, result }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true; // Keep channel open for async response
+  }
+
+  if (request.type === 'RECORD_HIDDEN' && ['bait', 'spam', 'slop'].includes(request.reason)) {
+    recordHidden(request.reason)
+      .then((stats) => sendResponse({ success: true, stats }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
   }
 
   if (request.type === 'RECORD_AD') {
