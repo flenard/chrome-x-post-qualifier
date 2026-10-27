@@ -5,13 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/build.mjs --watch",
-    "build": "npm run typecheck && node scripts/build.mjs",
+    "build": "npm run typecheck && bun test && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "sync-key": "node scripts/sync-key.mjs"
+    "sync-key": "node scripts/sync-key.mjs",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.308",
     "@types/node": "^22.13.9",
+    "happy-dom": "^21.0.4",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
   }

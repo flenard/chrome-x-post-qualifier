@@ -108,6 +108,19 @@ export function getTweetId(article: HTMLElement): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * The author's @handle (original case), without "@". Read from the profile
+ * link, not the visible text: a display name is free text, so a spammer named
+ * "Giveaway @naval" would otherwise pass as the trusted @naval.
+ */
+export function getAuthorHandle(header: HTMLElement): string | null {
+  for (const link of Array.from(header.querySelectorAll<HTMLAnchorElement>('a[href^="/"]'))) {
+    const m = link.getAttribute('href')?.match(/^\/(\w+)$/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 function extractTexts(article: HTMLElement): { text: string; quotedText: string; quotedHandle: string } {
   let text = '';
   let quotedText = '';

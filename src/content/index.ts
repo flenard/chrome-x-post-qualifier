@@ -1,4 +1,4 @@
-import { parseTweetElement, detectIsAd, getTweetId } from '../services/tweet-parser';
+import { parseTweetElement, detectIsAd, getTweetId, getAuthorHandle } from '../services/tweet-parser';
 import {
   getSettings,
   getCachedQualification,
@@ -177,24 +177,11 @@ function showUnscored(article: HTMLElement, header: HTMLElement) {
 }
 
 /**
- * The author's @handle (original case), without "@". Read from the profile
- * link, not the visible text: a display name is free text, so a spammer named
- * "Giveaway @naval" would otherwise pass as the trusted @naval.
- */
-function authorHandle(header: HTMLElement): string | null {
-  for (const link of Array.from(header.querySelectorAll<HTMLAnchorElement>('a[href^="/"]'))) {
-    const m = link.getAttribute('href')?.match(/^\/(\w+)$/);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-/**
  * If the author is trusted: show the "Trusted" badge, undo any collapse, stop
  * scoring. Returns true when it handled the tweet.
  */
 function showIfTrusted(article: HTMLElement, header: HTMLElement): boolean {
-  const handle = authorHandle(header);
+  const handle = getAuthorHandle(header);
   if (!handle || !trustedHandles.has(normalizeHandle(handle))) return false;
 
   stopWatching(article);
@@ -274,7 +261,7 @@ function applyQualification(
 
   // 1. Render Badge
   if (currentSettings.showInFeedBadge) {
-    const handle = authorHandle(headerContainer);
+    const handle = getAuthorHandle(headerContainer);
     const trust = handle
       ? {
           handle,
