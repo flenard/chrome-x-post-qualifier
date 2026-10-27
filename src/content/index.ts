@@ -14,6 +14,8 @@ import type { ExtensionSettings, QualificationResult } from '../types';
 
 const DWELL_MS = 450;        // how long a tweet must stay in view before we pay to score it
 const SCAN_DEBOUNCE_MS = 100; // coalesce DOM mutation bursts into one scan
+const BACKOFF_START_MS = 30_000;     // first pause after a failed API call
+const BACKOFF_MAX_MS = 10 * 60_000;  // the pause doubles up to this
 
 let currentSettings: ExtensionSettings | null = null;
 let trustedHandles = new Set<string>();
@@ -23,6 +25,12 @@ const countedHidden = new Set<string>();
 type TimerId = ReturnType<typeof setTimeout>;
 
 const dwellTimers = new Map<HTMLElement, TimerId>();
+
+// After a failed API call, auto mode stops sending posts for a while, so an
+// outage or a rate limit (429) is not hit again by every post scrolled past.
+// A "Qualify" click still goes through.
+let autoPausedUntil = 0;
+let backoffMs = 0;
 
 // IntersectionObserver to analyze tweets when they appear in viewport
 const intersectionObserver = new IntersectionObserver(
@@ -217,6 +225,12 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
     return;
   }
 
+  // Still watched: it is tried again the next time it scrolls into view.
+  if (!force && Date.now() < autoPausedUntil) {
+    processingTweets.delete(tweetId);
+    return;
+  }
+
   const metadata = parseTweetElement(article);
   if (!metadata || !(metadata.text || metadata.quotedText)) {
     processingTweets.delete(tweetId);
@@ -224,7 +238,9 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
   }
 
   const failed = (reason: string) => {
-    console.warn(`[X-Ray] Qualification failed for ${tweetId}:`, reason);
+    backoffMs = Math.min(backoffMs ? backoffMs * 2 : BACKOFF_START_MS, BACKOFF_MAX_MS);
+    autoPausedUntil = Date.now() + backoffMs;
+    console.warn(`[X-Ray] Qualification failed for ${tweetId}, auto mode paused ${backoffMs / 1000}s:`, reason);
     processingTweets.delete(tweetId);
     injectPillBadge(userNameContainer, null, () => handleQualifyTweet(article, true));
   };
@@ -238,6 +254,8 @@ async function handleQualifyTweet(article: HTMLElement, force: boolean) {
       }
 
       if (response && response.success && response.result) {
+        backoffMs = 0;
+        autoPausedUntil = 0;
         processingTweets.delete(tweetId);
         stopWatching(article);
         applyQualification(article, userNameContainer, response.result);
